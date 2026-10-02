@@ -1,0 +1,106 @@
+name: Build VoiceStudioAndroid APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '**.zip'
+      - '.github/workflows/android-apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Extract Android source ZIP
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/source"
+          ZIP_FILE=$(find "$GITHUB_WORKSPACE" \
+            -maxdepth 1 -type f -iname '*.zip' \
+            | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No source ZIP found"
+            exit 1
+          fi
+
+          unzip -o "$ZIP_FILE" -d "$GITHUB_WORKSPACE/source"
+
+          # Extract nested ZIP files if present
+          for i in 1 2 3 4 5; do
+            NESTED=$(find "$GITHUB_WORKSPACE/source" \
+              -type f -iname '*.zip' | head -n 1)
+
+            if [ -z "$NESTED" ]; then
+              break
+            fi
+
+            DEST="${NESTED%.zip}_extracted"
+            mkdir -p "$DEST"
+            unzip -o "$NESTED" -d "$DEST"
+            rm "$NESTED"
+          done
+
+      - name: Find Android project
+        run: |
+          PROJECT_FILE=$(find "$GITHUB_WORKSPACE/source" \
+            -type f \( -name settings.gradle \
+            -o -name settings.gradle.kts \) \
+            | head -n 1)
+
+          if [ -z "$PROJECT_FILE" ]; then
+            echo "ERROR: settings.gradle(.kts) not found"
+            find "$GITHUB_WORKSPACE/source" -maxdepth 4 -type f
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PROJECT_FILE")
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Found project: $PROJECT_DIR"
+
+      - name: Build debug APK
+        run: |
+          cd "$PROJECT_DIR"
+
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            ./gradlew --no-daemon \
+              -P kotlin.compiler.jvmTarget=17 \
+              :app:assembleDebug
+          else
+            sudo apt-get update
+            sudo apt-get install -y gradle
+            gradle --no-daemon :app:assembleDebug
+          fi
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoiceStudioAndroid-debug-apk
+          path: |
+            source/**/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
