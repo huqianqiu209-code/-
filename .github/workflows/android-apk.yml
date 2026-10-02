@@ -69,7 +69,21 @@ jobs:
           fi
           echo "Project root: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
+      - name: Fix Java and Kotlin JVM target
+        shell: bash
+        run: |
+          set -euo pipefail
+          GRADLE_FILE="$PROJECT_DIR/app/build.gradle.kts"
+          if [ ! -f "$GRADLE_FILE" ]; then
+            echo "ERROR: app/build.gradle.kts not found"
+            find "$PROJECT_DIR" -name 'build.gradle*' -type f
+            exit 1
+          fi
+          sed -i 's/JavaVersion.VERSION_1_8/JavaVersion.VERSION_17/g' "$GRADLE_FILE"
+          sed -i 's/JavaVersion.VERSION_1_8/JavaVersion.VERSION_17/g' "$GRADLE_FILE"
+          echo "Updated Java compatibility to Java 17"
+          grep -n -E 'sourceCompatibility|targetCompatibility|jvmTarget' "$GRADLE_FILE" || true
+          
       - name: Build debug APK
         shell: bash
         run: |
