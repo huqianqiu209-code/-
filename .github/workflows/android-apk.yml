@@ -1,0 +1,91 @@
+name: Android APK Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+    paths:
+      - '**.zip'
+      - '.github/workflows/android-apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Extract Android project from ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p work
+          ZIP_FILE="VoiceStudioAndroid-recording-update-2.zip"
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "ERROR: $ZIP_FILE not found in repository root"
+            ls -lah
+            exit 1
+          fi
+          unzip -q "$ZIP_FILE" -d work
+
+          # Unpack nested ZIP archives, if any.
+          for round in 1 2 3 4 5; do
+            mapfile -d '' zips < <(find work -type f -iname '*.zip' -print0)
+            [ ${#zips[@]} -gt 0 ] || break
+            for z in "${zips[@]}"; do
+              dest="${z%.zip}_extracted"
+              mkdir -p "$dest"
+              echo "Extracting: $z"
+              unzip -oq "$z" -d "$dest"
+              rm -f "$z"
+            done
+          done
+
+          # Locate the actual Android project root.
+          PROJECT_DIR=""
+          while IFS= read -r -d '' f; do
+            PROJECT_DIR="$(dirname "$f")"
+            break
+          done < <(find work -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print0)
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: Could not find settings.gradle or settings.gradle.kts. ZIP may not contain the Android project."
+            find work -maxdepth 5 -type f | head -200
+            exit 1
+          fi
+          echo "Project root: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            ./gradlew --no-daemon assembleDebug
+          else
+            gradle --no-daemon assembleDebug
+          fi
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoiceStudioAndroid-debug-apk
+          path: |
+            **/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
